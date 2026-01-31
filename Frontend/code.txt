@@ -1,0 +1,556 @@
+import Booking from "../models/Booking.js";
+import Payment from "../models/Payment.js";
+
+export const processPayment = async (req, res) => {
+  try {
+    const { bookingId, method, cardDetails } = req.body;
+
+    // 1️⃣ Validate Booking
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    // 2️⃣ Calculate totalAmount on server side (security)
+    const totalAmount = booking.tests.reduce((sum, t) => sum + t.price, 0);
+
+    // 3️⃣ Handle Payment
+    if (method === "online") {
+      booking.paymentStatus = "paid";
+      // Here you can integrate Stripe/PayPal with cardDetails
+    } else if (method === "cash") {
+      booking.paymentStatus = "pending"; // Cash on collection
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid payment method" });
+    }
+
+    await booking.save();
+
+    // 4️⃣ Create Payment record
+    const payment = new Payment({
+      bookingId,
+      amount: totalAmount,
+      method,
+      status: method === "online" ? "paid" : "pending"
+    });
+
+    await payment.save();
+
+    res.status(200).json({
+      success: true,
+      totalAmount,
+      message: method === "online" ? "Payment Successful" : "Booking Confirmed"
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+                                     import Booking from '../models/Booking.js';
+
+// Create Booking
+export const createBooking = async (req, res) => {
+  try {
+    const booking = new Booking(req.body);
+    await booking.save();
+
+    // Calculate totalAmount from tests (server-side)
+    const totalAmount = booking.tests.reduce((sum, t) => sum + t.price, 0);
+
+    res.status(201).json({
+      success: true,
+      bookingId: booking._id,
+      totalAmount,
+      tests: booking.tests,
+      message: "Booking created successfully. Proceed to payment."
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Booking failed" });
+  }
+};
+
+// Get single booking
+export const getBookingById = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    res.status(200).json({ success: true, booking });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+                 import mongoose from 'mongoose';
+
+
+const bookingSchema = new mongoose.Schema({
+
+  // 👤 Patient Info
+  patientName: { type: String, required: true },
+  phone: { type: String, required: true },
+  email: { type: String},
+  gender:{ type: String, required: true },
+  age: { type: String, required: true },
+  address:{ type: String, required: true },
+
+  // 🧪 Cart / Tests
+  tests: [
+    {
+      testId: String,
+      testName: String,
+      price: Number
+    }
+  ],
+
+  // 🏠 Collection Details
+  collectionType: {
+    type: String,
+    enum: ["home", "lab"],
+    required: true
+  },
+  preferredDate: String,
+  preferredTime: String,
+
+  // 💰 Payment
+  totalAmount: Number,
+  paymentStatus: {
+    type: String,
+    default: "pending"   // pending → paid
+  },
+
+  bookingStatus: {
+    type: String,
+    default: "created"
+  },
+
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+
+});
+const Booking = mongoose.model('Booking', bookingSchema);
+export default Booking; // MUST be export default                                                                   const paymentSchema = new mongoose.Schema({
+  bookingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Booking"
+  },
+  amount: Number,
+  method: String, // online | cash
+  status: {
+    type: String,
+    default: "paid"
+  },
+  transactionId: String,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const Payment = mongoose.model("Payment", paymentSchema);
+export default Payment;                                                                                                                             import { createBooking, getBookingById } from "../controllers/bookingController.js";
+import express from "express";
+const router = express.Router();
+
+router.get("/:id", getBookingById);
+router.post("/", createBooking);
+
+export default router;
+                  import express from "express";
+import { processPayment } from "../controllers/paymentController.js";
+
+const router = express.Router();
+
+router.post("/process", processPayment);
+
+export default router;
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import contactRoutes from './routes/contactRoutes.js';
+import dotenv from 'dotenv';
+ import bookingRoutes from './routes/bookingRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
+dotenv.config();
+const app = express();
+
+// 1. General Middleware
+app.use(cors());
+app.use(express.json());
+
+// 2. Routes (Move this ABOVE the error handler)
+app.use('/api/contact', contactRoutes);
+
+app.use("/api/booking", bookingRoutes);
+app.use("/api/payment", paymentRoutes);
+// 3. MongoDB connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.log("MongoDB connection error:", err));
+
+// 4. Error Handling Middleware (Must be AFTER routes)
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ success: false, message: "Internal Server Error" });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});                                                                                                                                import React, { useState } from "react";
+import { FaSpinner, FaCheckCircle, FaClipboardCheck } from "react-icons/fa";
+import { sendBookingMessage } from "../api/BookingApi";
+import { useNavigate } from "react-router-dom";
+import { testData } from "../Data/testData";
+export default function BookingForm({ cart, closeForm }) {
+
+  // 1️⃣ States
+  const [patientName, setPatientName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [gender, setGender] = useState("");
+  const [age, setAge] = useState("");
+  const [address, setAddress] = useState("");
+  const [collectionType, setCollectionType] = useState("home");
+  const [preferredDate, setPreferredDate] = useState("");
+  const [preferredTime, setPreferredTime] = useState("");
+
+  const [status, setStatus] = useState("idle");
+  const [feedback, setFeedback] = useState("");
+const navigate = useNavigate();
+  // 2️⃣ Submit Handler
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // Validation
+    if (!patientName || !phone || !preferredDate || !preferredTime) {
+      setStatus("error");
+      setFeedback("Please fill all required fields.");
+      return;
+    }
+
+    if (!cart || cart.length === 0) {
+      setStatus("error");
+      setFeedback("Please select at least one test before booking.");
+      return;
+    }
+
+    setStatus("processing");
+
+    // 3️⃣ Prepare booking data safely
+    const bookingData = {
+      patientName,
+      phone,
+      email,
+      gender,
+      age,
+      address,
+      collectionType,
+      preferredDate,
+      preferredTime,
+
+      tests: cart?.map(test => ({
+        testId: test._id,
+        testName: test.name,
+        price: test.discountedPrice
+      })) || [],
+
+      totalAmount: cart?.reduce(
+        (sum, test) => sum + test.discountedPrice,
+        0
+      ) || 0
+    };
+
+   const data = await sendBookingMessage(bookingData);
+
+// After successful booking
+if (data.success) {
+  setStatus("success");
+  setFeedback("Booking successful. Please proceed to payment.");
+
+  // Redirect to payment page with bookingId
+  setTimeout(() => {
+    navigate(`/payment/${data.bookingId}`);
+  }, 1000);
+}
+else {
+  setStatus("error");
+  setFeedback(data.message || "Booking failed.");
+}
+  };
+
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        backgroundColor: "rgba(0,0,0,0.5)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 1050
+      }}
+    >
+      <div
+        className="card shadow-lg p-4"
+        style={{
+          width: "100%",
+          maxWidth: "520px",
+          borderRadius: "12px"
+        }}
+      >
+        <h4 className="fw-semibold text-center mb-3">
+          Confirm Test Booking
+        </h4>
+
+        <form onSubmit={handleSubmit} className="d-flex flex-column gap-2">
+
+          <input className="form-control"
+            placeholder="Patient Name"
+            value={patientName}
+            onChange={(e) => setPatientName(e.target.value)}
+          />
+
+          <input className="form-control"
+            placeholder="Phone Number"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+
+          <input className="form-control"
+            placeholder="Email (optional)"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <div className="row">
+            <div className="col">
+              <input className="form-control"
+                placeholder="Age"
+                value={age}
+                onChange={(e) => setAge(e.target.value)}
+              />
+            </div>
+            <div className="col">
+              <select className="form-control"
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+              >
+                <option value="">Gender</option>
+                <option>Male</option>
+                <option>Female</option>
+              </select>
+            </div>
+          </div>
+
+          <textarea className="form-control"
+            placeholder="Address"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+          />
+
+          <select className="form-control"
+            value={collectionType}
+            onChange={(e) => setCollectionType(e.target.value)}
+          >
+            <option value="home">Home Collection</option>
+            <option value="lab">Lab Visit</option>
+          </select>
+
+          <div className="row">
+            <div className="col">
+              <input type="date" className="form-control"
+                value={preferredDate}
+                onChange={(e) => setPreferredDate(e.target.value)}
+              />
+            </div>
+            <div className="col">
+              <input type="time" className="form-control"
+                value={preferredTime}
+                onChange={(e) => setPreferredTime(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            className="btn btn-primary mt-2"
+            disabled={status === "processing"}
+          >
+            {status === "processing" ? "Booking..." : "Confirm Booking"}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-outline-secondary"
+            onClick={closeForm}
+          >
+            Cancel
+          </button>
+
+          {status === "error" && (
+            <div className="alert alert-danger py-2">{feedback}</div>
+          )}
+          {status === "success" && (
+            <div className="alert alert-success py-2">{feedback}</div>
+          )}
+
+        </form>
+      </div>
+    </div>
+  );
+}
+             
+import { useParams, useNavigate } from "react-router-dom";
+
+export default function Payment() {
+  const { bookingId } = useParams();
+  const navigate = useNavigate();
+
+  // Redirect function
+  const handlePayment = (method) => {
+    if (method === "online") {
+      navigate(`/online-payment/${bookingId}`);
+    } else if (method === "cash") {
+      navigate(`/cash-payment/${bookingId}`);
+    }
+  };
+
+  return (
+    <div className="d-flex flex-column min-vh-100">
+      <div className="container my-5">
+        <div
+          className="card shadow p-4 mx-auto"
+          style={{ maxWidth: "500px", borderRadius: "12px" }}
+        >
+          <h4 className="fw-semibold text-center mb-3">Complete Payment</h4>
+          <p className="text-center mb-3">
+            Booking ID: <span className="fw-medium">{bookingId}</span>
+          </p>
+
+          <div className="d-flex flex-column gap-3">
+            <button
+              className="btn btn-primary"
+              onClick={() => handlePayment("online")}
+            >
+              Pay Online
+            </button>
+
+            <button
+              className="btn btn-outline-secondary"
+              onClick={() => handlePayment("cash")}
+            >
+              Cash on Collection
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+        import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import axiosInstance from "../api/axiosInstance";
+
+export default function PaymentPage() {
+  const { bookingId } = useParams();
+  const navigate = useNavigate();
+  const [booking, setBooking] = useState(null);
+  const [showCardForm, setShowCardForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const [card, setCard] = useState({ number: "", expiry: "", cvv: "" });
+
+  useEffect(() => {
+    const fetchBooking = async () => {
+      try {
+        const res = await axiosInstance.get(`/booking/${bookingId}`);
+        setBooking(res.data.booking);
+      } catch (err) {
+        setStatus("Could not load booking data ❌");
+      }
+    };
+    fetchBooking();
+  }, [bookingId]);
+
+  const handlePayment = async (method) => {
+    setLoading(true);
+    try {
+      const res = await axiosInstance.post("/payment/process", {
+        bookingId,
+        method,
+        cardDetails: method === "online" ? card : null
+      });
+
+      if (res.data.success) {
+        setStatus(`Success! ${res.data.message}`);
+        setTimeout(() => navigate(`/confirmation/${bookingId}`), 1500);
+      } else {
+        setStatus("Payment failed. ❌");
+      }
+    } catch (err) {
+      setStatus("Transaction failed. ❌");
+    }
+    setLoading(false);
+  };
+
+  if (!booking) return <div className="text-center mt-5">Loading booking...</div>;
+
+  return (
+    <div className="container my-5">
+      <div className="card shadow p-4 mx-auto" style={{ maxWidth: "500px", borderRadius: "12px" }}>
+        <h4 className="fw-semibold text-center mb-3">Complete Your Booking</h4>
+        <p className="text-center text-muted">
+          Total Amount: <strong>${booking.totalAmount}</strong>
+        </p>
+
+        {!showCardForm ? (
+          <div className="d-flex flex-column gap-3 mt-4">
+            <button className="btn btn-primary py-2" onClick={() => setShowCardForm(true)}>
+              Pay Online
+            </button>
+            <button className="btn btn-outline-secondary py-2" onClick={() => handlePayment("cash")} disabled={loading}>
+              Cash on Collection
+            </button>
+          </div>
+        ) : (
+          <form className="mt-4" onSubmit={(e) => { e.preventDefault(); handlePayment("online"); }}>
+            <h6 className="mb-3">Card Details</h6>
+            <input type="text" className="form-control mb-2" placeholder="Card Number" required
+              value={card.number} onChange={(e) => setCard({ ...card, number: e.target.value })} />
+            <div className="d-flex gap-2">
+              <input type="text" className="form-control mb-3" placeholder="MM/YY" required
+                value={card.expiry} onChange={(e) => setCard({ ...card, expiry: e.target.value })} />
+              <input type="text" className="form-control mb-3" placeholder="CVV" required
+                value={card.cvv} onChange={(e) => setCard({ ...card, cvv: e.target.value })} />
+            </div>
+            <button className="btn btn-success w-100" type="submit" disabled={loading}>
+              {loading ? "Processing..." : `Pay $${booking.totalAmount}`}
+            </button>
+            <button className="btn btn-link w-100 mt-2 text-muted" type="button" onClick={() => setShowCardForm(false)}>
+              Go Back
+            </button>
+          </form>
+        )}
+
+        {status && <div className={`alert mt-3 text-center ${status.includes("Success") ? "alert-success" : "alert-danger"}`}>{status}</div>}
+      </div>
+    </div>
+  );
+}
+    import axiosInstance from "./axiosInstance";
+
+export const payOnline = async (bookingId) => {
+  const response = await axiosInstance.get(`/booking/${bookingId}`);
+
+  return response.data;
+};
